@@ -35,12 +35,34 @@ def main():
     viento_vel = curr['wind']['speed']
     viento_dir = curr['wind']['dir']
 
-    print("Redactando nota editorial...")
+   print("Redactando nota editorial de alta calidad...")
     
-    # PROMPT AVANZADO
+    # PROMPT REFORZADO
     prompt = f"""
-    Eres el editor jefe de la sección clima de un importante diario de la Patagonia Argentina.
-    Escribe una nota periodística completa sobre el tiempo hoy en {TARGET_CITY}.
+    Escribe una nota periodística para un diario de Neuquén, Argentina.
+    Datos: {TARGET_CITY}, {curr['temperature']}°C, {curr['summary']}, Viento {viento_vel}km/h.
+    
+    Instrucciones:
+    - Actúa como editor jefe de un diario regional.
+    - Estructura: Titular impactante, entrada informativa, desarrollo sobre el viento y recomendaciones.
+    - No uses listas, usa párrafos de redacción profesional.
+    """
+    
+    try:
+        # Usamos el nombre de modelo más estándar para la librería v1
+        response = client.models.generate_content(
+            model="gemini-1.5-flash", 
+            contents=prompt
+        )
+        texto_ia = response.text
+    except Exception as e:
+        # Si esto falla, intentamos con el nombre alternativo
+        try:
+            response = client.models.generate_content(model="models/gemini-1.5-flash", contents=prompt)
+            texto_ia = response.text
+        except:
+            print(f"Error persistente en IA: {e}")
+            texto_ia = "Error de conexión con la redacción central."
     
     DATOS TÉCNICOS:
     - Estado actual: {curr['summary']}
@@ -56,17 +78,6 @@ def main():
     4. Conclusión: Recomendaciones para los ciudadanos (ropa, cuidados, actividades al aire libre).
     5. Estilo: Serio, informativo pero cercano. No uses listas, usa párrafos fluidos.
     """
-    
-    try:
-        # Usamos gemini-1.5-flash que es estable
-        response = client.models.generate_content(
-            model="gemini-1.5-flash", 
-            contents=prompt
-        )
-        texto_ia = response.text
-    except Exception as e:
-        print(f"Error IA: {e}")
-        texto_ia = "Error en la redacción automática."
 
     # C. Formatear para WordPress con un diseño más elegante
     print("Enviando a WordPress...")
