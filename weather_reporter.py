@@ -16,36 +16,28 @@ genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-pro')
 
 def get_weather_data(city, api_key):
-    """Obtiene el pronóstico de Meteosource usando el endpoint 'point'."""
-    # Primero, Meteosource prefiere coordenadas o IDs de lugar. 
-    # Para simplicidad, usamos su búsqueda de lugares primero o el endpoint de texto.
+    # Usamos el endpoint 'free/point' de Meteosource
     url = "https://www.meteosource.com/api/v1/free/point"
     params = {
-        'place_id': city.lower(), # Ej: 'madrid'
+        'place_id': city.lower(),
         'sections': 'current,daily',
-        'timezone': 'auto',
-        'language': 'es',
-        'units': 'metric',
-        'key': api_key
+        'key': api_key,
+        'units': 'metric'
     }
-    
     response = requests.get(url, params=params)
     response.raise_for_status()
     data = response.json()
     
-    # Mapeo de datos para mantener compatibilidad con el resto del script
-    current = data['current']
     return {
         'name': city.capitalize(),
         'main': {
-            'temp': current['temperature'],
-            'feels_like': current['temperature'], # Meteosource Free no siempre da feels_like
-            'humidity': 50, # Valor genérico si no está en el plan free
+            'temp': data['current']['temperature'],
             'temp_max': data['daily']['data'][0]['all_day']['temperature_max'],
-            'temp_min': data['daily']['data'][0]['all_day']['temperature_min']
+            'temp_min': data['daily']['data'][0]['all_day']['temperature_min'],
+            'humidity': 50 # El plan free a veces omite este dato
         },
-        'weather': [{'description': current['summary']}],
-        'wind': {'speed': current['wind']['speed']}
+        'weather': [{'description': data['current']['summary']}],
+        'wind': {'speed': data['current']['wind']['speed']}
     }
 def generate_news_copy(weather_data):
     """Genera el texto de la noticia usando Gemini."""
@@ -146,15 +138,24 @@ def main():
     # Si tuvieras una API de generación de imágenes, aquí la llamarías y obtendrías una URL.
     # Por ahora, simplemente simula la generación.
     # image_url = generate_social_media_image(image_prompt)
-    image_url = "https://example.com/placeholder-weather-image.jpg" # Placeholder
-
-    # Añadir un enlace a la imagen en el contenido de la nota para la revisión
-    html_content = f"<img src='{image_url}' alt='Placa del clima para redes sociales' /><br/>"
-    html_content += f"<h1>{title}</h1>"
-    html_content += f"<p>{content.replace('\n', '</p><p>')}</p>" # Formatear párrafos
+ # Corregimos el error del backslash separando la lógica
+    content_paragraphs = content.replace('\n', '</p><p>')
+    
+    # Construcción segura del HTML
+    html_content = f"""
+    <div class="weather-report">
+        <img src='{image_url}' alt='Placa del clima para redes sociales' style='width:100%; max-width:600px; height:auto;' />
+        <br/>
+        <h1>{title}</h1>
+        <div class="content">
+            <p>{content_paragraphs}</p>
+        </div>
+        <hr>
+        <p><small>Nota generada automáticamente y guardada para revisión.</small></p>
+    </div>
+    """
 
     print("\nPublicando nota en WordPress como borrador...")
     post_to_wordpress(title, html_content, WORDPRESS_URL, WORDPRESS_USER, WORDPRESS_APP_PASSWORD)
-
 if __name__ == "__main__":
     main()
