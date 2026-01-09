@@ -1,5 +1,6 @@
 import os
 import requests
+import unicodedata
 from google import genai # Nueva librería
 
 # 1. Configuración
@@ -13,45 +14,72 @@ TARGET_CITY = os.environ.get("TARGET_CITY", "Madrid")
 # 2. Cliente de Gemini
 client = genai.Client(api_key=GEMINI_API_KEY)
 
+def normalizar_ciudad(texto):
+    """Convierte 'Neuquén' en 'neuquen' para que la API no falle."""
+    texto = texto.lower()
+    # Elimina tildes
+    texto = ''.join(c for c in unicodedata.normalize('NFD', texto)
+                  if unicodedata.category(c) != 'Mn')
+    return texto
+    
 def get_weather_data(city, api_key):
+    city_id = normalizar_ciudad(city)
     url = "https://www.meteosource.com/api/v1/free/point"
-    params = {'place_id': city.lower(), 'sections': 'current,daily', 'key': api_key, 'units': 'metric'}
+    params = {
+        'place_id': city_id, 
+        'sections': 'current,daily', 
+        'key': api_key, 
+        'units': 'metric'
+    }
     response = requests.get(url, params=params)
+    
+    # Debug para ver qué pasó si falla
+    if response.status_code != 200:
+        print(f"Error API Meteosource: {response.status_code} - {response.text}")
+        
     response.raise_for_status()
-    data = response.json()
-    return data
+    return response.json()
 
 def main():
-    # Verificación de variables (mejorada para debug)
-    required = ["METEOSOURCE_API_KEY", "GEMINI_API_KEY", "WORDPRESS_USER", "WORDPRESS_APP_PASSWORD", "WORDPRESS_URL"]
-    for var in required:
-        if not os.environ.get(var):
-            print(f"ERROR: Falta la variable {var}")
-            return
+    # ... (Verificación de variables igual)
 
-    # Obtener clima
+    # 1. Obtener clima
     data = get_weather_data(TARGET_CITY, METEOSOURCE_API_KEY)
     curr = data['current']
     day = data['daily']['data'][0]['all_day']
 
-    # Generar Texto con Gemini 2.0 (el modelo de 2026)
-    prompt = f"Escribe una noticia breve sobre el clima en {TARGET_CITY}. Hoy hace {curr['temperature']}°C con {curr['summary']}. Máxima de {day['temperature_max']}°C. Usa tono periodístico y termina con consejos."
+    # 2. Prompt Maestro para Nota + Placa
+    prompt = f"""
+    Actúa como un periodista digital. Datos de {TARGET_CITY}: 
+    Actual: {curr['temperature']}°C, {curr['summary']}. Máx: {day['temperature_max']}°C, Mín: {day['temperature_min']}°C.
+    
+    Genera:
+    1. Un titular corto y potente.
+    2. Tres párrafos de noticia.
+    3. Al final, escribe un bloque llamado [PROMPT_IMAGEN] con instrucciones detalladas para crear una placa de Instagram (1080x1080) que resuma estos datos usando un estilo visual moderno y limpio.
+    """
     
     response = client.models.generate_content(
-        model="gemini-2.0-flash", # Usando el modelo más actual
+        model="gemini-2.0-flash",
         contents=prompt
     )
-    full_text = response.text
+    full_output = response.text
 
-    # Preparar contenido HTML
-    content_paragraphs = full_text.replace('\n', '</p><p>')
-    title = f"Clima en {TARGET_CITY}: {curr['summary']} y {curr['temperature']}°C"
-    
-    html_content = f"""
-    <div style='font-family: sans-serif;'>
-        <h1>{title}</h1>
-        <p>{content_paragraphs}</p>
-        <p><strong>Datos técnicos:</strong> Viento a {curr['wind']['speed']} m/s. Humedad estimada.</p>
+    # 3. Separar la noticia del prompt de imagen
+    partes = full_output.split("[PROMPT_IMAGEN]")
+    noticia_html = partes[0].replace('\n', '</p><p>')
+    prompt_grafico = partes[1] if len(partes) > 1 else "No se generó prompt de imagen"
+
+    # 4. Formatear para WordPress
+    title = f"Pronóstico en {TARGET_CITY}: {curr['summary']}"
+    html_final = f"""
+    <div style='background: #f4f4f4; padding: 20px; border-radius: 10px;'>
+        <h2>{title}</h2>
+        {noticia_html}
+        <div style='background: #333; color: #fff; padding: 15px; margin-top: 20px;'>
+            <strong>💡 SUGERENCIA DE PLACA PARA REDES:</strong><br>
+            <em>{prompt_grafico}</em>
+        </div>
     </div>
     """
 
