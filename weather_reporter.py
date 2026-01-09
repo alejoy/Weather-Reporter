@@ -11,6 +11,7 @@ WORDPRESS_APP_PASSWORD = os.environ.get("WORDPRESS_APP_PASSWORD")
 WORDPRESS_URL = os.environ.get("WORDPRESS_URL").rstrip('/')
 TARGET_CITY = os.environ.get("TARGET_CITY", "Neuquen")
 
+# Inicialización del cliente (Ajuste para evitar 404)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 def normalizar_ciudad(texto):
@@ -19,103 +20,86 @@ def normalizar_ciudad(texto):
     return texto
 
 def main():
-    print(f"Obteniendo datos climáticos profundos para {TARGET_CITY}...")
+    # 1. Obtener clima
+    print(f"Conectando con Meteosource para {TARGET_CITY}...")
     city_id = normalizar_ciudad(TARGET_CITY)
-    
-    # Pedimos secciones más completas (current y daily)
     weather_url = f"https://www.meteosource.com/api/v1/free/point?place_id={city_id}&sections=current,daily&key={METEOSOURCE_API_KEY}&units=metric"
     
     res_w = requests.get(weather_url)
     res_w.raise_for_status()
     data = res_w.json()
-    
     curr = data['current']
     day = data['daily']['data'][0]['all_day']
-    # Extraemos info específica para el editor
     viento_vel = curr['wind']['speed']
-    viento_dir = curr['wind']['dir']
 
-   print("Redactando nota editorial de alta calidad...")
-    
-    # PROMPT REFORZADO
+    # 2. Redactar con Gemini (Ajuste de modelo)
+    print("Redactando nota editorial...")
     prompt = f"""
-    Escribe una nota periodística para un diario de Neuquén, Argentina.
-    Datos: {TARGET_CITY}, {curr['temperature']}°C, {curr['summary']}, Viento {viento_vel}km/h.
+    Eres el Editor Jefe de un diario en Neuquén. Escribe una nota periodística profesional.
+    DATOS: {TARGET_CITY}, {curr['temperature']}°C, {curr['summary']}, Viento {viento_vel}km/h.
+    Máxima: {day['temperature_max']}°C, Mínima: {day['temperature_min']}°C.
     
-    Instrucciones:
-    - Actúa como editor jefe de un diario regional.
-    - Estructura: Titular impactante, entrada informativa, desarrollo sobre el viento y recomendaciones.
-    - No uses listas, usa párrafos de redacción profesional.
+    REQUISITOS:
+    - Titular profesional sin hashtags.
+    - Tres párrafos analizando la jornada y el impacto del viento.
+    - Tono serio y regional.
     """
     
     try:
-        # Usamos el nombre de modelo más estándar para la librería v1
+        # Probamos la llamada estándar
         response = client.models.generate_content(
             model="gemini-1.5-flash", 
             contents=prompt
         )
         texto_ia = response.text
     except Exception as e:
-        # Si esto falla, intentamos con el nombre alternativo
-        try:
-            response = client.models.generate_content(model="models/gemini-1.5-flash", contents=prompt)
-            texto_ia = response.text
-        except:
-            print(f"Error persistente en IA: {e}")
-            texto_ia = "Error de conexión con la redacción central."
-    
-    DATOS TÉCNICOS:
-    - Estado actual: {curr['summary']}
-    - Temperatura actual: {curr['temperature']}°C
-    - Máxima prevista: {day['temperature_max']}°C
-    - Mínima prevista: {day['temperature_min']}°C
-    - Viento: {viento_vel} km/h dirección {viento_dir}
-    
-    REQUISITOS DE LA NOTA:
-    1. Título: Atractivo y profesional (usa el estilo de diarios como La Mañana o Río Negro).
-    2. Introducción: Describe cómo arranca la jornada en la ciudad.
-    3. Desarrollo: Analiza cómo evolucionará la temperatura hacia la tarde y menciona el viento (factor clave en Patagonia).
-    4. Conclusión: Recomendaciones para los ciudadanos (ropa, cuidados, actividades al aire libre).
-    5. Estilo: Serio, informativo pero cercano. No uses listas, usa párrafos fluidos.
-    """
+        print(f"Error detectado: {e}. Reintentando con configuración alternativa...")
+        # Fallback de texto si la cuota o el modelo fallan
+        texto_ia = f"Jornada con {curr['summary']} en {TARGET_CITY}. Se espera una máxima de {day['temperature_max']}°C."
 
-    # C. Formatear para WordPress con un diseño más elegante
-    print("Enviando a WordPress...")
-    wp_api = f"{WORDPRESS_URL}/wp-json/wp/v2/posts"
-    auth = (WORDPRESS_USER, WORDPRESS_APP_PASSWORD)
+    # 3. Diseño de la Placa y Cuerpo
+    color_clima = "#e67e22" if curr['temperature'] > 25 else "#3498db"
     
-    # Separamos el título del cuerpo (asumiendo que la IA pone el título en la primera línea)
-    lineas = texto_ia.strip().split('\n')
-    titulo_nota = lineas[0].replace('#', '').strip()
-    cuerpo_nota = '<p>' + '</p><p>'.join(lineas[1:]) + '</p>'
-    
-    # Creamos un bloque visual para los datos clave
-    bloque_datos = f"""
-    <div style="background:#f9f9f9; border-left:5px solid #e67e22; padding:15px; margin-bottom:20px;">
-        <strong>Servicio Meteorológico Personalizado</strong><br>
-        📍 Ciudad: {TARGET_CITY}<br>
-        🌡️ Extremos: {day['temperature_min']}°C / {day['temperature_max']}°C<br>
-        🌬️ Viento: {viento_vel} km/h {viento_dir}
+    # Separar título de cuerpo
+    partes = texto_ia.strip().split('\n', 1)
+    titulo_final = partes[0].replace('#', '').strip()
+    cuerpo_final = partes[1].replace('\n', '<br>') if len(partes) > 1 else partes[0]
+
+    html_final = f"""
+    <div style="max-width:600px; margin:auto; font-family: 'Helvetica', sans-serif; border:1px solid #ddd; border-radius:15px; overflow:hidden;">
+        <div style="background: {color_clima}; color: white; padding: 40px 20px; text-align: center;">
+            <h2 style="margin: 0; text-transform: uppercase; font-size: 18px; letter-spacing: 2px;">Pronóstico Hoy</h2>
+            <div style="font-size: 72px; font-weight: bold; margin: 10px 0;">{curr['temperature']}°C</div>
+            <p style="font-size: 20px; margin: 0;">{curr['summary'].upper()}</p>
+            <div style="margin-top: 20px; display: flex; justify-content: space-around; font-size: 14px; border-top: 1px solid rgba(255,255,255,0.3); padding-top: 15px;">
+                <span>🌡️ Mín: {day['temperature_min']}°C</span>
+                <span>🌬️ Viento: {viento_vel} km/h</span>
+                <span>🌡️ Máx: {day['temperature_max']}°C</span>
+            </div>
+        </div>
+        <div style="padding: 25px; line-height: 1.8; color: #2c3e50; font-size: 17px; background: white;">
+            {cuerpo_final}
+        </div>
     </div>
     """
 
+    # 4. Enviar a WordPress
+    print("Publicando en WordPress...")
+    wp_api = f"{WORDPRESS_URL}/wp-json/wp/v2/posts"
+    auth = (WORDPRESS_USER, WORDPRESS_APP_PASSWORD)
+    
     post_data = {
-        'title': titulo_nota if len(titulo_nota) > 10 else f"El tiempo en {TARGET_CITY}: Pronóstico para hoy",
-        'content': bloque_datos + cuerpo_nota,
+        'title': titulo_final,
+        'content': html_final,
         'status': 'draft'
     }
 
-    headers = {
-        'User-Agent': 'Mozilla/5.0',
-        'Content-Type': 'application/json'
-    }
-
-    res_wp = requests.post(wp_api, json=post_data, auth=auth, headers=headers)
+    res_wp = requests.post(wp_api, json=post_data, auth=auth)
     
     if res_wp.status_code == 201:
-        print(f"✅ ¡LOGRADO! Nota publicada como borrador: {titulo_nota}")
+        print(f"✅ LOGRADO: '{titulo_final}' disponible en borradores.")
     else:
-        print(f"❌ Error {res_wp.status_code}: {res_wp.text}")
+        print(f"❌ Error WP {res_wp.status_code}: {res_wp.text}")
 
 if __name__ == "__main__":
     main()
