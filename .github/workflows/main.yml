@@ -12,21 +12,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
+     - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.9' # O la versión que prefieras (3.8, 3.10, etc.)
+          python-version: '3.12' # Subimos a la versión actual
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests google-generativeai
+          pip install requests google-genai # Cambiamos a la nueva librería
 
       - name: Run weather reporter script
         run: python weather_reporter.py
         env:
           METEOSOURCE_API_KEY: ${{ secrets.METEOSOURCE_API_KEY }}
-          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           WORDPRESS_USER: ${{ secrets.WORDPRESS_USER }}
           WORDPRESS_APP_PASSWORD: ${{ secrets.WORDPRESS_APP_PASSWORD }}
