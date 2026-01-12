@@ -8,78 +8,64 @@ import re
 # --- CONFIGURACIÓN ---
 METEOSOURCE_API_KEY = os.environ.get("METEOSOURCE_API_KEY")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-UNSPLASH_ACCESS_KEY = os.environ.get("UNSPLASH_ACCESS_KEY")
+# Credenciales para Google Images
+GOOGLE_SEARCH_API_KEY = os.environ.get("GOOGLE_SEARCH_API_KEY")
+GOOGLE_SEARCH_CX = os.environ.get("GOOGLE_SEARCH_CX")
+
 WORDPRESS_USER = os.environ.get("WORDPRESS_USER")
 WORDPRESS_APP_PASSWORD = os.environ.get("WORDPRESS_APP_PASSWORD")
 WORDPRESS_URL = os.environ.get("WORDPRESS_URL").rstrip('/')
+WORDPRESS_AUTHOR_ID = os.environ.get("WORDPRESS_AUTHOR_ID", "1") # Default ID 1 (Admin)
 
-# LISTA DE DESTINOS (Ordenados para la rotación semanal)
-# Agrega todos los que quieras. El script recorrerá 1 por semana.
+# LISTA DE DESTINOS (Rotación Semanal)
 DESTINOS = [
-    "Villa La Angostura", 
-    "San Martín de los Andes", 
-    "Villa Pehuenia", 
-    "Caviahue", 
-    "Ruta de los Siete Lagos", 
-    "Parque Nacional Lanín", 
-    "Lago Nahuel Huapi", 
-    "Volcán Lanín", 
-    "Junín de los Andes", 
-    "Villa Traful",
-    "Cerro Chapelco", 
-    "Río Limay", 
-    "El Chocón", 
-    "Lago Huechulafquen",
-    "Moquehue",
-    "Paso Córdoba Neuquén",
-    "Lago Aluminé",
-    "Volcán Batea Mahuida"
+    "Villa La Angostura", "San Martín de los Andes", "Villa Pehuenia", 
+    "Caviahue", "Ruta de los Siete Lagos", "Parque Nacional Lanín", 
+    "Lago Nahuel Huapi", "Volcán Lanín", "Junín de los Andes", "Villa Traful",
+    "Cerro Chapelco", "Río Limay", "El Chocón", "Lago Huechulafquen",
+    "Moquehue", "Paso Córdoba Neuquén", "Lago Aluminé", "Volcán Batea Mahuida"
 ]
 
 def seleccionar_destino_por_semana():
-    """
-    Elige un destino basado en el número de semana del año.
-    Esto evita repeticiones y garantiza rotación perfecta sin base de datos.
-    """
-    semana_actual = datetime.now().isocalendar()[1] # Devuelve número 1-52
-    indice = semana_actual % len(DESTINOS) # Matemáticas de módulo para rotar
+    """Elige destino según número de semana para no repetir."""
+    semana_actual = datetime.now().isocalendar()[1]
+    indice = semana_actual % len(DESTINOS)
     destino = DESTINOS[indice]
-    print(f"📅 Semana {semana_actual}: Toca destino '{destino}' (Índice {indice})")
+    print(f"📅 Semana {semana_actual}: Destino '{destino}'")
     return destino
 
-def obtener_imagen_unsplash(query):
-    """Busca una foto HD específica en Unsplash."""
-    url = f"https://api.unsplash.com/search/photos"
-    # Ajustamos la query para ser más precisos con la geografía
+def buscar_imagen_google(query):
+    """Busca una imagen real en Google Images."""
+    url = "https://www.googleapis.com/customsearch/v1"
     params = {
-        "query": f"{query} landscape", 
-        "client_id": UNSPLASH_ACCESS_KEY,
-        "orientation": "landscape",
-        "per_page": 1,
-        "order_by": "relevant" # Relevant suele dar la foto más icónica
+        "q": f"{query} paisaje turismo neuquen", # Contexto para que salgan fotos lindas
+        "cx": GOOGLE_SEARCH_CX,
+        "key": GOOGLE_SEARCH_API_KEY,
+        "searchType": "image",
+        "imgSize": "large", # Pedimos fotos grandes
+        "imgType": "photo", # Solo fotos, no dibujos
+        "num": 1,
+        "safe": "active"
     }
     
     try:
+        print(f"👉 Buscando imagen en Google para: {query}...", end=" ")
         res = requests.get(url, params=params)
         data = res.json()
         
-        if data['results']:
-            foto = data['results'][0]
+        if "items" in data:
+            item = data["items"][0]
+            print("✅")
             return {
-                "url": foto['urls']['regular'],
-                "autor": foto['user']['name'],
-                "link_autor": foto['user']['links']['html'],
-                "descripcion": foto['alt_description'] or query
+                "url": item["link"],
+                "contexto": item["title"],
+                "origen": item["displayLink"] # Para dar crédito
             }
         else:
-            print(f"⚠️ No se encontró foto exacta para {query}. Intentando fallback...")
-            # Si falla, buscamos algo un poco más genérico pero de la zona
-            if "Neuquén" not in query:
-                return obtener_imagen_unsplash(f"{query} Neuquen")
+            print("❌ No encontrada.")
             return None
-            
     except Exception as e:
-        print(f"⚠️ Error Unsplash: {e}")
+        print(f"⚠️ Error Google Search: {e}")
         return None
 
 def llamar_api_directa(modelo, prompt):
@@ -87,7 +73,7 @@ def llamar_api_directa(modelo, prompt):
     headers = {'Content-Type': 'application/json'}
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.6} # Bajamos temp para que alucine menos
+        "generationConfig": {"temperature": 0.5}
     }
 
     try:
@@ -97,29 +83,33 @@ def llamar_api_directa(modelo, prompt):
             print("✅")
             return res.json()['candidates'][0]['content']['parts'][0]['text']
         else:
-            print(f"❌ (Error {res.status_code})")
+            print("❌")
             return None
     except:
         return None
 
 def generar_nota_turismo(destino):
+    # Priorizamos el Lite que funciona bien
     modelos = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-1.5-flash"]
     
     prompt = f"""
-    Actúa como un Editor de Viajes experto en la Patagonia.
-    Escribe un ARTÍCULO SEO para Google Discover sobre: {destino}.
+    Actúa como un Guía de Turismo Responsable de la Provincia de Neuquén.
+    Escribe un ARTÍCULO PERIODÍSTICO sobre: {destino}.
     
-    INSTRUCCIONES ESTRICTAS (NO SALUDES, EMPIEZA DIRECTO CON HTML):
-    1. TÍTULO (H1): Atractivo y con palabra clave. Ejemplo: "Escapada a {destino}: guía completa".
-    2. BAJADA (H2): Resumen inspirador en una frase.
-    3. ESTRUCTURA DE CONTENIDO (Usa <h3>):
-       - "Por qué ir": Descripción del paisaje y la magia del lugar.
-       - "Qué hacer": 3 actividades concretas.
-       - "Cuándo ir": Mejor época.
-       - "Cómo llegar": Rutas principales (menciona rutas de Neuquén).
+    ESTRUCTURA OBLIGATORIA (HTML):
+    1. TÍTULO (H1): Atractivo. Ejemplo: "Turismo en Neuquén: guía para visitar {destino}".
+    2. BAJADA (H2): Resumen periodístico.
+    3. CUERPO (Secciones con <h3>):
+       - "El paisaje": Descripción realista.
+       - "Actividades": Qué se puede hacer.
+       - "Datos útiles": Cómo llegar y época recomendada.
+       
+    4. SECCIÓN OBLIGATORIA DE CONCIENTIZACIÓN (H3 "Turismo Responsable"):
+       - Si es zona de bosques/montaña/lagos: Escribe un párrafo FUERTE recordando que está **prohibido hacer fuego** fuera de campings habilitados, regresar con la basura y cuidar la fauna.
+       - Menciona el riesgo de incendios forestales si aplica.
     
-    4. TONO: Periodístico, inspirador, sin frases de relleno como "¡Absolutamente!".
-    5. IDIOMA: Español Argentino.
+    5. TONO: Informativo, serio pero invitando a viajar.
+    6. IDIOMA: Español Argentino.
     """
 
     for modelo in modelos:
@@ -129,61 +119,49 @@ def generar_nota_turismo(destino):
     return None
 
 def limpiar_respuesta(texto):
-    """
-    Limpia el texto basura de la IA.
-    Elimina todo lo que esté antes del primer <h1>.
-    """
-    # 1. Quitar markdown de código
     texto = texto.replace('```html', '').replace('```', '').replace('<!DOCTYPE html>', '').strip()
     
-    # 2. Buscar dónde empieza el H1 y cortar todo lo anterior
     if "<h1>" in texto:
-        indice_inicio = texto.find("<h1>")
-        texto = texto[indice_inicio:]
+        indice = texto.find("<h1>")
+        texto = texto[indice:]
     
-    # 3. Extraer título para WordPress
     titulo_match = re.search(r'<h1>(.*?)</h1>', texto, re.IGNORECASE)
     if titulo_match:
         titulo = titulo_match.group(1).strip()
         cuerpo = re.sub(r'<h1>.*?</h1>', '', texto, count=1, flags=re.IGNORECASE).strip()
     else:
-        titulo = f"Descubrí {destino}"
+        titulo = f"Destino recomendado: {destino_hoy}"
         cuerpo = texto
         
     return titulo, cuerpo
 
 def main():
-    # 1. Rotación de Destino (Sin azar)
     destino_hoy = seleccionar_destino_por_semana()
-    print(f"--- GENERANDO NOTA TURISMO: {destino_hoy} ---")
+    print(f"--- NOTA TURISMO: {destino_hoy} ---")
     
-    # 2. Buscar Foto
-    img_data = obtener_imagen_unsplash(destino_hoy)
+    # Buscar Foto Real en Google
+    img_data = buscar_imagen_google(destino_hoy)
     if not img_data:
-        print("❌ Error crítico: No hay imagen. Abortando.")
+        print("❌ Sin imagen, cancelando.")
         return
 
-    # 3. Redactar Nota
+    # Redactar Nota
     texto_crudo = generar_nota_turismo(destino_hoy)
     if not texto_crudo:
-        print("❌ Error crítico: No hay texto.")
+        print("❌ Sin texto, cancelando.")
         return
 
-    # 4. Limpieza Profunda
     titulo, cuerpo = limpiar_respuesta(texto_crudo)
-    
-    # Validación final de título
-    if len(titulo) < 5: 
-        titulo = f"Guía de viaje: {destino_hoy}, la joya de Neuquén"
+    if len(titulo) < 5: titulo = f"Descubrí {destino_hoy}: naturaleza pura"
 
-    # 5. Armar HTML Final
+    # HTML Final
     html_post = f"""
     <div style="font-family: 'Arial', sans-serif; font-size: 18px; line-height: 1.8; color: #333; max-width: 800px; margin: auto;">
         
         <figure style="margin: 0 0 30px 0;">
-            <img src="{img_data['url']}" alt="{img_data['descripcion']}" style="width: 100%; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
-            <figcaption style="font-size: 12px; color: #777; text-align: right; margin-top: 5px;">
-                Foto: <a href="{img_data['link_autor']}?utm_source=WeatherReporter&utm_medium=referral" target="_blank" style="color: #777;">{img_data['autor']}</a> en Unsplash
+            <img src="{img_data['url']}" alt="Paisaje de {destino_hoy}" style="width: 100%; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+            <figcaption style="font-size: 12px; color: #888; text-align: right; margin-top: 5px;">
+                Imagen ilustrativa (Fuente: {img_data['origen']})
             </figcaption>
         </figure>
 
@@ -191,20 +169,20 @@ def main():
             {cuerpo}
         </div>
         
-        <div style="margin-top: 40px; padding: 20px; background: #e8f8f5; border-left: 5px solid #1abc9c; font-size: 16px;">
-            🎒 <strong>Tip de Viajero:</strong> Neuquén tiene paisajes únicos. Recordá siempre llevarte tu basura y cuidar el medio ambiente.
+        <div style="margin-top: 40px; padding: 20px; background: #fff3cd; border-left: 5px solid #ffc107; font-size: 16px; color: #856404;">
+            🔥 <strong>Prevención de Incendios:</strong> Recordá que en la Patagonia el fuego solo está permitido en lugares habilitados. Si ves humo, llamá urgente al 105 o 911.
         </div>
     </div>
     """
 
-    # 6. Publicar
-    print(f"Publicando: {titulo}")
+    # Publicar con Autor Específico
+    print(f"Publicando como Autor ID {WORDPRESS_AUTHOR_ID}: {titulo}")
     auth = (WORDPRESS_USER, WORDPRESS_APP_PASSWORD)
     post = {
         'title': titulo, 
         'content': html_post, 
         'status': 'draft',
-        # 'categories': [ID_CATEGORIA_TURISMO] # Opcional
+        'author': int(WORDPRESS_AUTHOR_ID) # Aquí asignamos el autor
     }
     r = requests.post(f"{WORDPRESS_URL}/wp-json/wp/v2/posts", json=post, auth=auth)
     
