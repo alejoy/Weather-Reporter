@@ -35,16 +35,20 @@ def seleccionar_destino_por_semana():
     return destino
 
 def buscar_imagen_google(query):
-    """Busca una imagen real en Google Images."""
+    """Busca una imagen real en Google Images, evitando fuentes problemáticas."""
     url = "https://www.googleapis.com/customsearch/v1"
+    
+    # DOMINIOS PROHIBIDOS: Sitios que bloquean sus imágenes o dan URLs temporales
+    BLACK_LIST = ["instagram.com", "facebook.com", "pinterest.com", "x.com", "twitter.com"]
+    
     params = {
-        "q": f"{query} paisaje turismo neuquen", # Contexto para que salgan fotos lindas
+        "q": f"{query} paisaje turismo neuquen", 
         "cx": GOOGLE_SEARCH_CX,
         "key": GOOGLE_SEARCH_API_KEY,
         "searchType": "image",
-        "imgSize": "large", # Pedimos fotos grandes
-        "imgType": "photo", # Solo fotos, no dibujos
-        "num": 1,
+        "imgSize": "large",
+        "imgType": "photo",
+        "num": 5, # Pedimos 5 resultados para poder filtrar
         "safe": "active"
     }
     
@@ -53,17 +57,31 @@ def buscar_imagen_google(query):
         res = requests.get(url, params=params)
         data = res.json()
         
-        if "items" in data:
-            item = data["items"][0]
-            print("✅")
-            return {
-                "url": item["link"],
-                "contexto": item["title"],
-                "origen": item["displayLink"] # Para dar crédito
-            }
-        else:
+        if "items" not in data:
             print("❌ No encontrada.")
             return None
+            
+        # FILTRADO: Buscamos el primer resultado que NO esté en la lista negra
+        for item in data["items"]:
+            origen = item["displayLink"].lower()
+            es_valido = True
+            for dominio_prohibido in BLACK_LIST:
+                if dominio_prohibido in origen:
+                    print(f"⚠️ Descartando imagen de {origen} (fuente inestable).")
+                    es_valido = False
+                    break
+            
+            if es_valido:
+                print(f"✅ Imagen encontrada en: {origen}")
+                return {
+                    "url": item["link"],
+                    "contexto": item["title"],
+                    "origen": item["displayLink"]
+                }
+        
+        print("❌ Ninguna imagen válida encontrada después de filtrar.")
+        return None
+
     except Exception as e:
         print(f"⚠️ Error Google Search: {e}")
         return None
