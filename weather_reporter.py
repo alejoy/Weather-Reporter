@@ -12,7 +12,7 @@ WORDPRESS_APP_PASSWORD = os.environ.get("WORDPRESS_APP_PASSWORD")
 WORDPRESS_URL = os.environ.get("WORDPRESS_URL").rstrip('/')
 TARGET_CITY = os.environ.get("TARGET_CITY", "Neuquen")
 
-# Diccionario para traducir estados (PLACA EN ESPAÑOL)
+# Diccionario para placa visual
 TRADUCCIONES = {
     "sunny": "Soleado", "mostly sunny": "Mayormente Soleado", "partly sunny": "Parcialmente Soleado",
     "mostly cloudy": "Mayormente Nublado", "cloudy": "Nublado", "overcast": "Cubierto",
@@ -28,7 +28,7 @@ def normalizar_ciudad(texto):
     return ''.join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn')
 
 def llamar_api_directa(modelo, prompt):
-    """Intenta generar texto con un modelo específico vía REST."""
+    """Llamada REST directa para evitar conflictos de librería."""
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent?key={GEMINI_API_KEY}"
     headers = {'Content-Type': 'application/json'}
     payload = {
@@ -37,45 +37,38 @@ def llamar_api_directa(modelo, prompt):
     }
 
     try:
-        print(f"👉 Probando con modelo: {modelo}...")
+        print(f"👉 Conectando con: {modelo}...")
         res = requests.post(url, headers=headers, data=json.dumps(payload))
         
         if res.status_code == 200:
             return res.json()['candidates'][0]['content']['parts'][0]['text']
         elif res.status_code == 429:
-            print(f"⚠️ Cuota excedida en {modelo} (429). Saltando al siguiente...")
-            return None
-        elif res.status_code == 404:
-            print(f"⚠️ Modelo no encontrado {modelo} (404). Saltando...")
+            print(f"⚠️ Cuota llena en {modelo}. Saltando...")
             return None
         else:
-            print(f"⚠️ Error desconocido ({res.status_code}): {res.text}")
+            print(f"⚠️ Error {modelo} ({res.status_code})")
             return None
     except Exception as e:
-        print(f"⚠️ Excepción de red: {e}")
+        print(f"⚠️ Error red: {e}")
         return None
 
 def generar_noticia_inteligente(prompt):
-    # LISTA DE PRIORIDAD (CASCADA)
-    # 1. Pro (Calidad máxima) -> 2. Flash (Velocidad/Respaldo) -> 3. Pro Viejo
-    modelos_a_probar = [
-        "gemini-1.5-pro",
-        "gemini-1.5-flash", 
-        "gemini-2.0-flash-exp", # Experimental si existe
-        "gemini-pro"
-    ]
+    # CAMBIO DE ESTRATEGIA:
+    # Usamos 'gemini-1.5-flash' PRIMERO. Es perfecto para noticias y tiene límites muy altos.
+    # Solo si falla, probamos el Pro.
+    modelos = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
 
-    for modelo in modelos_a_probar:
+    for modelo in modelos:
         texto = llamar_api_directa(modelo, prompt)
         if texto:
-            print(f"✅ ¡ÉXITO! Nota generada con {modelo}")
+            print(f"✅ ¡ÉXITO! Redacción completada con {modelo}")
             return texto
-        time.sleep(1) # Pequeña pausa antes de reintentar
+        time.sleep(1)
     
     return None
 
 def main():
-    print(f"--- INICIANDO REPORTE NEUQUÉN ---")
+    print(f"--- REPORTE AUTOMÁTICO: {TARGET_CITY} ---")
     
     # 1. Clima
     city_id = normalizar_ciudad(TARGET_CITY)
@@ -90,48 +83,37 @@ def main():
 
     # 2. Redacción
     prompt = f"""
-    Actúa como Periodista Senior de un diario en Neuquén.
-    Escribe una NOTICIA EXTENSA y PROFESIONAL (SEO) sobre el clima.
+    Eres Editor de un diario en Neuquén. Escribe una NOTICIA EXTENSA (SEO) sobre el clima.
+    DATOS: {TARGET_CITY}, {estado_es}, Temp {curr['temperature']}°C, Viento {curr['wind']['speed']} km/h.
     
-    DATOS:
-    - Ciudad: {TARGET_CITY}
-    - Estado: {estado_es}
-    - Temp Actual: {curr['temperature']}°C
-    - Mín: {day['temperature_min']}°C | Máx: {day['temperature_max']}°C
-    - Viento: {curr['wind']['speed']} km/h
-
-    REQUISITOS (HTML OBLIGATORIO):
-    1. Título H1 impactante (Clickbait ético).
-    2. CUERPO: Escribe 4 PÁRRAFOS LARGOS.
-       - Intro: Sensación térmica y estado del cielo.
-       - Desarrollo: Pronóstico para la tarde.
-       - Viento: Análisis detallado (es clave en Patagonia).
-       - Cierre: Recomendaciones.
-    3. Usa etiquetas <h3> para subtítulos y <strong> para resaltar datos.
-    4. IDIOMA: Español Argentino Neutro.
+    REQUISITOS (HTML):
+    1. Título H1 llamativo.
+    2. CUERPO: 4 PÁRRAFOS COMPLETOS.
+       - Intro, Temperatura, Viento, Recomendaciones.
+    3. Usa <h3> y <strong>.
+    4. IDIOMA: Español Argentino.
     """
     
     texto_ia = generar_noticia_inteligente(prompt)
 
-    # Fallback FINAL (Solo si fallan los 4 modelos)
+    # Fallback
     if not texto_ia:
-        texto_ia = f"<h3>Pronóstico {TARGET_CITY}</h3><p>Condiciones actuales: {estado_es}, {curr['temperature']}°C. Máxima de {day['temperature_max']}°C.</p>"
+        texto_ia = f"<h3>Reporte {TARGET_CITY}</h3><p>Condiciones: {estado_es}, {curr['temperature']}°C.</p>"
 
     # 3. Limpieza
     texto_limpio = texto_ia.replace('```html', '').replace('```', '').strip()
     lineas = texto_limpio.split('\n')
     
-    # Extracción de título
     titulo = f"Pronóstico {TARGET_CITY}: {estado_es} y {curr['temperature']}°C"
     cuerpo = texto_limpio
     
     if len(lineas) > 0 and ("<h1>" in lineas[0] or "#" in lineas[0] or len(lineas[0]) < 100):
-         clean_title = lineas[0].replace('<h1>','').replace('</h1>','').replace('#','').replace('*','').strip()
-         if len(clean_title) > 5:
-            titulo = clean_title
+         t = lineas[0].replace('<h1>','').replace('</h1>','').replace('#','').replace('*','').strip()
+         if len(t) > 5:
+            titulo = t
             cuerpo = "\n".join(lineas[1:])
 
-    # 4. Placa Visual y HTML Final
+    # 4. HTML Final
     color_bg = "#e67e22" if curr['temperature'] > 26 else "#2980b9"
     
     html_post = f"""
