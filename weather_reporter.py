@@ -34,8 +34,8 @@ def llamar_api_directa(modelo, prompt):
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
-            "temperature": 0.4, # Bajamos temperatura para ser más periodísticos y menos "creativos"
-            "maxOutputTokens": 1500
+            "temperature": 0.4,
+            "maxOutputTokens": 1800 # Aumentamos un poco para permitir el párrafo extra
         }
     }
 
@@ -46,23 +46,17 @@ def llamar_api_directa(modelo, prompt):
         if res.status_code == 200:
             print("✅ ¡CONECTADO!")
             return res.json()['candidates'][0]['content']['parts'][0]['text']
-        elif res.status_code == 404:
-            print("❌ No encontrado (404)")
-        elif res.status_code == 429:
-            print("⏳ Cuota llena (429)")
-        elif res.status_code == 503:
-            print("💤 Servicio ocupado (503)")
+        elif res.status_code in [404, 429, 503]:
+            print(f"⚠️ Error {res.status_code}, saltando...")
         else:
-            print(f"⚠️ Error {res.status_code}")
+            print(f"⚠️ Error desconocido {res.status_code}")
         return None
     except Exception as e:
         print(f"⚠️ Error red: {e}")
         return None
 
 def generar_noticia_periodistica(prompt):
-    # Ponemos el LITE primero porque ya vimos que funciona en tu cuenta
     modelos = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-1.5-flash"]
-
     for modelo in modelos:
         texto = llamar_api_directa(modelo, prompt)
         if texto:
@@ -71,26 +65,21 @@ def generar_noticia_periodistica(prompt):
     return None
 
 def limpiar_respuesta_ia(texto):
-    """Elimina etiquetas de código y extrae el título limpio."""
-    # 1. Quitar bloques de código markdown y doctypes
-    texto = texto.replace('```html', '').replace('```', '').replace('<!DOCTYPE html>', '').replace('<html>', '').replace('<body>', '').replace('</html>', '').replace('</body>', '')
-    texto = texto.strip()
+    """Limpia markdown y extrae título H1."""
+    texto = texto.replace('```html', '').replace('```', '').replace('<!DOCTYPE html>', '').strip()
     
-    # 2. Extraer el Título (H1) usando Regex para mayor precisión
     titulo_match = re.search(r'<h1>(.*?)</h1>', texto, re.IGNORECASE)
     if titulo_match:
         titulo_limpio = titulo_match.group(1).strip()
-        # Removemos el H1 del cuerpo para no repetirlo
         cuerpo_limpio = re.sub(r'<h1>.*?</h1>', '', texto, count=1, flags=re.IGNORECASE).strip()
     else:
-        # Fallback si la IA no puso H1
         titulo_limpio = "Reporte del Clima"
         cuerpo_limpio = texto
 
     return titulo_limpio, cuerpo_limpio
 
 def main():
-    print(f"--- REPORTE ESTILO CLARÍN: {TARGET_CITY} ---")
+    print(f"--- REPORTE ESTILO CLARÍN + RECOMENDACIONES ---")
     
     # 1. Datos
     city_id = normalizar_ciudad(TARGET_CITY)
@@ -103,58 +92,57 @@ def main():
     day = data['daily']['data'][0]['all_day']
     estado_es = traducir_estado(curr['summary'])
 
-    # 2. Prompt Periodístico (Estilo Clarín)
+    # 2. Prompt Actualizado con Lógica de Recomendaciones
     prompt = f"""
-    Actúa como un Meteorólogo Redactor del diario Clarín o La Nación.
-    Escribe un reporte detallado sobre el clima hoy en {TARGET_CITY}.
+    Actúa como un Meteorólogo Redactor de un diario importante (tipo Clarín o La Nación).
+    Escribe una nota útil y detallada sobre el clima hoy en {TARGET_CITY}.
     
-    DATOS TÉCNICOS:
-    - Ciudad: {TARGET_CITY}
-    - Estado actual: {estado_es}
-    - Temperatura actual: {curr['temperature']}°C
-    - Mínima pronosticada: {day['temperature_min']}°C
+    DATOS:
+    - Estado: {estado_es}
+    - Temp Actual: {curr['temperature']}°C
     - Máxima pronosticada: {day['temperature_max']}°C
-    - Viento: {curr['wind']['speed']} km/h (Dirección: {curr['wind']['dir']})
+    - Viento: {curr['wind']['speed']} km/h
     
-    INSTRUCCIONES DE REDACCIÓN (ESTRICTO):
-    1. ESTRUCTURA HTML LIMPIA: No uses etiquetas <html>, <head> o <body>. Solo usa <h1>, <h2>, <p> y <strong>.
-    2. TÍTULO (H1): Debe ser informativo y formal. Ejemplo: "Clima en {TARGET_CITY}: pronóstico del tiempo para hoy".
-    3. BAJADA (H2): Un resumen de una frase sobre lo más destacado (viento, calor o lluvias).
-    4. CUERPO DE LA NOTA (4 Párrafos Mínimo):
-       - Párrafo 1 (Situación Actual): Describe cómo arranca el día, temperatura actual y sensación.
-       - Párrafo 2 (Evolución): "Por la tarde...", describe si sube la temperatura y llega a la máxima.
-       - Párrafo 3 (Viento y Alertas): Detalla la velocidad del viento, vital para la Patagonia.
-       - Párrafo 4 (Cierre/Mañana): Breve proyección de cómo terminará la jornada.
-    5. ESTILO: Usa frases como "El Servicio Meteorológico indica...", "Se espera una jornada...", "La humedad se mantendrá...".
+    INSTRUCCIONES DE ESTRUCTURA (HTML):
+    1. TÍTULO (H1): Informativo. Ejemplo: "Clima en {TARGET_CITY}: pronóstico para hoy".
+    2. BAJADA (H2): Resumen de una línea (Ej: "Alerta por vientos" o "Jornada de calor intenso").
+    3. CUERPO (5 PÁRRAFOS OBLIGATORIOS):
+       - Párrafo 1: Situación actual (mañana).
+       - Párrafo 2: Pronóstico de la tarde (temperatura máxima).
+       - Párrafo 3: El viento (análisis detallado).
+       - Párrafo 4 (NUEVO - RECOMENDACIONES):
+         * Si T > 28°C o hay sol: Recomendar hidratación, evitar sol directo al mediodía y usar protector solar.
+         * Si Viento > 25km/h: Recomendar precaución al manejar, cuidado con ramas y prohibido hacer fuego.
+         * Si T < 10°C: Recomendar abrigo.
+       - Párrafo 5: Cierre breve sobre la noche.
+    
+    4. ESTILO: Profesional, de servicio y preventivo. Usa etiquetas <p>, <h3> y <strong>.
     """
     
     texto_crudo = generar_noticia_periodistica(prompt)
 
     if not texto_crudo:
-        print("❌ Fallo total de IA.")
-        titulo_final = f"Clima en {TARGET_CITY}: Pronóstico para hoy"
-        cuerpo_final = f"<p>Temperatura actual: {curr['temperature']}°C. Se espera una máxima de {day['temperature_max']}°C.</p>"
-    else:
-        # Usamos la nueva función de limpieza
-        titulo_final, cuerpo_final = limpiar_respuesta_ia(texto_crudo)
+        print("❌ Fallo IA.")
+        return
 
-    # Si el título sigue siendo genérico, lo forzamos
-    if len(titulo_final) < 5 or "DOCTYPE" in titulo_final:
-        titulo_final = f"Clima en {TARGET_CITY}: el pronóstico del tiempo para hoy"
+    titulo_final, cuerpo_final = limpiar_respuesta_ia(texto_crudo)
 
-    # 3. HTML Final (Diseño Sobrio tipo Diario)
+    if len(titulo_final) < 5:
+        titulo_final = f"Clima en {TARGET_CITY}: el tiempo para hoy"
+
+    # 3. HTML Final
     color_bg = "#e67e22" if curr['temperature'] > 26 else "#3498db"
     
     html_post = f"""
     <div style="font-family: 'Arial', sans-serif; font-size: 18px; line-height: 1.6; color: #333; max-width: 800px; margin: auto;">
         
-        <div style="border-top: 1px solid #ddd; border-bottom: 1px solid #ddd; padding: 15px 0; margin-bottom: 25px; display: flex; align-items: center; justify-content: space-between;">
+        <div style="background: #f9f9f9; border-left: 6px solid {color_bg}; padding: 20px; margin-bottom: 25px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 2px 5px rgba(0,0,0,0.05);">
             <div>
-                <span style="font-size: 12px; text-transform: uppercase; color: #666; font-weight: bold;">Datos al instante</span>
-                <div style="font-size: 32px; font-weight: bold; color: {color_bg};">{curr['temperature']}°C</div>
-                <div style="font-size: 16px; text-transform: capitalize;">{estado_es}</div>
+                <span style="font-size: 12px; text-transform: uppercase; color: #666; font-weight: bold; letter-spacing: 1px;">Ahora en {TARGET_CITY}</span>
+                <div style="font-size: 38px; font-weight: 800; color: #333; margin-top: 5px;">{curr['temperature']}°C</div>
+                <div style="font-size: 16px; color: {color_bg}; font-weight: bold;">{estado_es}</div>
             </div>
-            <div style="text-align: right; font-size: 14px; color: #555;">
+            <div style="text-align: right; font-size: 14px; color: #555; line-height: 1.8;">
                 <div>⬇ Mín: <strong>{day['temperature_min']}°</strong></div>
                 <div>⬆ Máx: <strong>{day['temperature_max']}°</strong></div>
                 <div>💨 Viento: <strong>{curr['wind']['speed']} km/h</strong></div>
@@ -165,8 +153,8 @@ def main():
             {cuerpo_final}
         </div>
 
-        <div style="margin-top: 30px; font-size: 13px; color: #888; border-top: 1px solid #eee; padding-top: 10px;">
-            <em>Información proporcionada por Meteosource.</em>
+        <div style="margin-top: 30px; font-size: 13px; color: #999; text-align: center; border-top: 1px solid #eee; padding-top: 15px;">
+            Reporte generado automáticamente por Meteosource.
         </div>
     </div>
     """
@@ -178,7 +166,7 @@ def main():
     r = requests.post(f"{WORDPRESS_URL}/wp-json/wp/v2/posts", json=post, auth=auth)
     
     if r.status_code == 201:
-        print("✅ ÉXITO: Nota publicada correctamente.")
+        print("✅ ÉXITO: Nota publicada.")
     else:
         print(f"❌ Error WP: {r.text}")
 
