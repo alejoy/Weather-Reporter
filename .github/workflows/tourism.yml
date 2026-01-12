@@ -30,3 +30,6 @@ jobs:
           WORDPRESS_USER: ${{ secrets.WORDPRESS_USER }}
           WORDPRESS_APP_PASSWORD: ${{ secrets.WORDPRESS_APP_PASSWORD }}
           WORDPRESS_URL: ${{ secrets.WORDPRESS_URL }}
+          GOOGLE_SEARCH_API_KEY: ${{ secrets.GOOGLE_SEARCH_API_KEY }}
+          GOOGLE_SEARCH_CX: ${{ secrets.GOOGLE_SEARCH_CX }}
+          WORDPRESS_AUTHOR_ID: ${{ secrets.WORDPRESS_AUTHOR_ID }}
