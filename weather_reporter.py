@@ -3,198 +3,160 @@ import requests
 import unicodedata
 import json
 
-# CONFIGURACIÓN
+# --- CONFIGURACIÓN ---
 METEOSOURCE_API_KEY = os.environ.get("METEOSOURCE_API_KEY")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") 
 WORDPRESS_USER = os.environ.get("WORDPRESS_USER")
 WORDPRESS_APP_PASSWORD = os.environ.get("WORDPRESS_APP_PASSWORD")
 WORDPRESS_URL = os.environ.get("WORDPRESS_URL").rstrip('/')
 TARGET_CITY = os.environ.get("TARGET_CITY", "Neuquen")
 
-# DICCIONARIO DE TRADUCCIÓN
+# Diccionario para traducir estados del clima (para la placa)
 TRADUCCIONES = {
-    "sunny": "Soleado",
-    "mostly sunny": "Mayormente Soleado",
-    "partly sunny": "Parcialmente Soleado",
-    "mostly cloudy": "Mayormente Nublado",
-    "cloudy": "Nublado",
-    "overcast": "Cubierto",
-    "rain": "Lluvia",
-    "light rain": "Lluvia Débil",
-    "heavy rain": "Lluvia Intensa",
-    "snow": "Nieve",
-    "thunderstorm": "Tormenta",
-    "clear": "Despejado",
-    "fog": "Niebla",
-    "mist": "Neblina"
+    "sunny": "Soleado", "mostly sunny": "Mayormente Soleado", "partly sunny": "Parcialmente Soleado",
+    "mostly cloudy": "Mayormente Nublado", "cloudy": "Nublado", "overcast": "Cubierto",
+    "rain": "Lluvia", "light rain": "Lluvia Débil", "heavy rain": "Lluvia Intensa",
+    "snow": "Nieve", "thunderstorm": "Tormenta", "clear": "Despejado", "fog": "Niebla", "mist": "Neblina"
 }
 
-def traducir_estado(texto_ingles):
-    texto_lower = texto_ingles.lower().strip()
-    return TRADUCCIONES.get(texto_lower, texto_ingles).upper()
+def traducir_estado(texto):
+    return TRADUCCIONES.get(texto.lower().strip(), texto).upper()
 
 def normalizar_ciudad(texto):
     texto = texto.lower()
-    texto = ''.join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn')
-    return texto
+    return ''.join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn')
 
-def descubrir_mejor_modelo():
-    """Consulta a la API qué modelos están disponibles y elige el mejor."""
+# --- LÓGICA DE AUTO-DESCUBRIMIENTO DE MODELO ---
+def obtener_mejor_modelo():
+    """Consulta a la API qué modelos están habilitados para tu clave."""
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
     try:
-        res = requests.get(url)
-        if res.status_code != 200:
-            print(f"⚠️ Error al listar modelos ({res.status_code})")
-            return None
-        
-        modelos = res.json().get('models', [])
-        print(f"🔎 Se encontraron {len(modelos)} modelos disponibles.")
-        
-        # Prioridad de elección: Pro > Flash > Pro Viejo > Cualquiera que genere contenido
-        for m in modelos:
-            nombre = m['name'] # Viene como 'models/gemini-1.5-pro'
-            if 'generateContent' in m['supportedGenerationMethods']:
-                if 'gemini-1.5-pro' in nombre:
-                    return nombre
-        
-        # Si no hay Pro, buscamos Flash
-        for m in modelos:
-            nombre = m['name']
-            if 'generateContent' in m['supportedGenerationMethods']:
-                if 'gemini-1.5-flash' in nombre:
-                    return nombre
+        response = requests.get(url)
+        if response.status_code != 200:
+            print(f"⚠️ Error al listar modelos: {response.text}")
+            return "gemini-1.5-flash" # Fallback seguro
 
-        # Si no, cualquiera que sea Gemini
+        modelos = response.json().get('models', [])
+        print(f"🔎 Analizando {len(modelos)} modelos disponibles...")
+
+        # Buscamos el mejor modelo en orden de prioridad
+        preferidos = ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-pro']
+        
+        for pref in preferidos:
+            for m in modelos:
+                # Verificamos si el nombre contiene el modelo preferido y soporta generación de contenido
+                if pref in m['name'] and 'generateContent' in m['supportedGenerationMethods']:
+                    nombre_real = m['name'].split('/')[-1] # Limpiamos 'models/'
+                    print(f"✅ Modelo seleccionado: {nombre_real}")
+                    return nombre_real
+        
+        # Si no encuentra coincidencia exacta, toma el primero que sea 'gemini'
         for m in modelos:
-            nombre = m['name']
-            if 'generateContent' in m['supportedGenerationMethods'] and 'gemini' in nombre:
-                return nombre
-                
-        return None
+             if 'generateContent' in m['supportedGenerationMethods'] and 'gemini' in m['name']:
+                 return m['name'].split('/')[-1]
+
+        return "gemini-1.5-flash" # Si no encuentra ninguno preferido
     except Exception as e:
-        print(f"⚠️ Error de red al descubrir modelos: {e}")
-        return None
+        print(f"⚠️ Error de red: {e}")
+        return "gemini-1.5-flash"
 
-def generar_noticia(modelo_completo, prompt):
-    """Usa el nombre exacto del modelo descubierto."""
-    # El modelo_completo ya viene como 'models/gemini-1.5-pro', así que ajustamos la URL
-    # La URL base espera: .../v1beta/models/gemini-1.5-pro:generateContent
-    # Si 'modelo_completo' ya tiene 'models/', no lo repetimos en la f-string si la logica lo requiere.
+def generar_noticia_rest(prompt):
+    # 1. Descubrimos el nombre correcto
+    modelo = obtener_mejor_modelo()
     
-    # La API endpoint es: https://generativelanguage.googleapis.com/v1beta/{NAME}:generateContent
-    url = f"https://generativelanguage.googleapis.com/v1beta/{modelo_completo}:generateContent?key={GEMINI_API_KEY}"
-    
+    # 2. Hacemos la petición directa
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent?key={GEMINI_API_KEY}"
     headers = {'Content-Type': 'application/json'}
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": 0.7}
     }
-    
+
     try:
-        print(f"🚀 Enviando petición a: {modelo_completo}...")
-        response = requests.post(url, headers=headers, data=json.dumps(payload))
-        
-        if response.status_code == 200:
-            return response.json()['candidates'][0]['content']['parts'][0]['text']
+        res = requests.post(url, headers=headers, data=json.dumps(payload))
+        if res.status_code == 200:
+            return res.json()['candidates'][0]['content']['parts'][0]['text']
         else:
-            print(f"⚠️ Falló generación ({response.status_code}): {response.text}")
+            print(f"⚠️ Error IA ({res.status_code}): {res.text}")
             return None
     except Exception as e:
-        print(f"⚠️ Error crítico: {e}")
+        print(f"⚠️ Excepción IA: {e}")
         return None
 
 def main():
-    # 1. Obtener clima
-    print(f"Obteniendo clima para {TARGET_CITY}...")
+    print(f"--- INICIANDO REPORTE PARA {TARGET_CITY} ---")
+    
+    # 1. Clima
     city_id = normalizar_ciudad(TARGET_CITY)
     url_w = f"https://www.meteosource.com/api/v1/free/point?place_id={city_id}&sections=current,daily&key={METEOSOURCE_API_KEY}&units=metric"
-    
     res_w = requests.get(url_w)
     res_w.raise_for_status()
     data = res_w.json()
+    
     curr = data['current']
     day = data['daily']['data'][0]['all_day']
-
     estado_es = traducir_estado(curr['summary'])
 
-    # 2. Descubrir y Redactar
-    print("Iniciando proceso de IA...")
-    nombre_modelo = descubrir_mejor_modelo()
+    # 2. Redacción
+    prompt = f"""
+    Actúa como Periodista de Neuquén. Escribe una NOTICIA SEO DETALLADA.
+    DATOS: Ciudad {TARGET_CITY}, Estado {estado_es}, Temp {curr['temperature']}°C, Viento {curr['wind']['speed']} km/h.
     
-    texto_ia = None
-    if nombre_modelo:
-        prompt = f"""
-        Actúa como Periodista Senior de Neuquén. Escribe una NOTICIA EXTENSA (SEO) sobre el clima.
-        
-        DATOS:
-        - Estado: {estado_es}
-        - Temp: {curr['temperature']}°C
-        - Mín: {day['temperature_min']}°C | Máx: {day['temperature_max']}°C
-        - Viento: {curr['wind']['speed']} km/h
+    REQUISITOS (HTML):
+    - Título H1 impactante.
+    - 4 párrafos de análisis.
+    - Usa <h3> para subtítulos.
+    - IDIOMA: Español.
+    """
+    
+    texto_ia = generar_noticia_rest(prompt)
 
-        REQUISITOS (HTML):
-        1. Escribe 4 PÁRRAFOS LARGOS Y DETALLADOS.
-        2. Tono serio, informativo y de servicio.
-        3. Analiza el impacto del viento.
-        4. Usa <h3> para subtítulos y <strong> para datos.
-        5. IDIOMA: Español.
-        """
-        texto_ia = generar_noticia(nombre_modelo, prompt)
-    else:
-        print("❌ No se encontraron modelos disponibles en tu cuenta.")
-
-    # Fallback si todo falla
+    # Fallback
     if not texto_ia:
-        texto_ia = f"""
-        <h3>Reporte Meteorológico {TARGET_CITY}</h3>
-        <p>Condiciones actuales: <strong>{estado_es}</strong> con <strong>{curr['temperature']}°C</strong>.</p>
-        <p>Se espera una máxima de {day['temperature_max']}°C y vientos de {curr['wind']['speed']} km/h.</p>
-        <p><em>Nota: Sistema de redacción en mantenimiento.</em></p>
-        """
+        texto_ia = f"<h3>Reporte {TARGET_CITY}</h3><p>Condiciones actuales: {estado_es}, {curr['temperature']}°C.</p>"
 
-    # 3. Procesamiento de texto
+    # 3. Limpieza y HTML Final
     texto_limpio = texto_ia.replace('```html', '').replace('```', '').strip()
     lineas = texto_limpio.split('\n')
-    titulo = lineas[0].replace('<h1>', '').replace('</h1>', '').replace('#', '').strip()
     
-    if len(titulo) > 100 or "<" in titulo: 
-        titulo = f"Pronóstico {TARGET_CITY}: {estado_es} y {curr['temperature']}°C"
-        cuerpo = texto_limpio
-    else:
-        cuerpo = "\n".join(lineas[1:])
+    # Extraer título si la IA lo puso
+    titulo = f"Pronóstico {TARGET_CITY}: {estado_es} y {curr['temperature']}°C"
+    cuerpo = texto_limpio
+    
+    # Intento simple de extraer título si viene en la primera línea
+    if len(lineas) > 0 and ("<h1>" in lineas[0] or "#" in lineas[0] or len(lineas[0]) < 100):
+         titulo_posible = lineas[0].replace('<h1>','').replace('</h1>','').replace('#','').replace('*','').strip()
+         if len(titulo_posible) > 5: # Validar que no sea vacío
+            titulo = titulo_posible
+            cuerpo = "\n".join(lineas[1:])
 
-    # 4. HTML Final
     color_bg = "#e67e22" if curr['temperature'] > 26 else "#2980b9"
     
-    html_final = f"""
-    <div style="font-family: 'Georgia', serif; font-size: 18px; color: #333; line-height: 1.6;">
-        <div style="background: {color_bg}; color: white; padding: 40px; border-radius: 12px; text-align: center; margin-bottom: 30px;">
-            <p style="text-transform: uppercase; font-size: 14px; letter-spacing: 2px; margin:0; opacity:0.9; font-family: sans-serif;">Reporte Oficial</p>
-            <h2 style="font-size: 90px; margin: 5px 0; font-weight: 700; font-family: sans-serif;">{curr['temperature']}°C</h2>
-            <p style="font-size: 26px; font-weight: 700; text-transform: uppercase; margin:0; font-family: sans-serif;">{estado_es}</p>
-            <div style="margin-top: 25px; border-top: 1px solid rgba(255,255,255,0.4); padding-top: 20px; display: flex; justify-content: center; gap: 30px; font-size: 16px;">
-                <span>Min: <strong>{day['temperature_min']}°</strong></span>
-                <span>Viento: <strong>{curr['wind']['speed']} km/h</strong></span>
-                <span>Max: <strong>{day['temperature_max']}°</strong></span>
+    html_post = f"""
+    <div style="font-family:'Georgia',serif; font-size:18px; line-height:1.6; color:#333;">
+        <div style="background:{color_bg}; color:white; padding:30px; border-radius:10px; text-align:center; margin-bottom:20px;">
+            <p style="text-transform:uppercase; font-size:14px; opacity:0.8; margin:0; font-family:sans-serif;">Reporte del Tiempo</p>
+            <h2 style="font-size:80px; margin:5px 0; font-weight:700; font-family:sans-serif;">{curr['temperature']}°C</h2>
+            <p style="font-size:24px; font-weight:600; text-transform:uppercase; margin:0; font-family:sans-serif;">{estado_es}</p>
+            <div style="margin-top:20px; border-top:1px solid rgba(255,255,255,0.3); padding-top:15px; display:flex; justify-content:center; gap:20px;">
+                <span>Min: <b>{day['temperature_min']}°</b></span>
+                <span>Viento: <b>{curr['wind']['speed']} km/h</b></span>
+                <span>Max: <b>{day['temperature_max']}°</b></span>
             </div>
         </div>
-        <div style="background: #fff; padding: 10px;">
-            {cuerpo}
-        </div>
+        <div style="background:#fff; padding:10px;">{cuerpo}</div>
     </div>
     """
 
-    # 5. Publicar
-    print(f"Publicando: {titulo}")
+    # 4. Publicar
     auth = (WORDPRESS_USER, WORDPRESS_APP_PASSWORD)
-    post_data = {'title': titulo, 'content': html_final, 'status': 'draft'}
+    post = {'title': titulo, 'content': html_post, 'status': 'draft'}
+    r = requests.post(f"{WORDPRESS_URL}/wp-json/wp/v2/posts", json=post, auth=auth)
     
-    res = requests.post(f"{WORDPRESS_URL}/wp-json/wp/v2/posts", json=post_data, auth=auth)
-    
-    if res.status_code == 201:
+    if r.status_code == 201:
         print("✅ ÉXITO: Nota publicada.")
     else:
-        print(f"❌ Error WP: {res.text}")
+        print(f"❌ Error WP: {r.text}")
 
 if __name__ == "__main__":
     main()
