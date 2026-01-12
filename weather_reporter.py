@@ -39,24 +39,40 @@ def normalizar_ciudad(texto):
     texto = ''.join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn')
     return texto
 
-def llamar_api_google(modelo, prompt):
-    """Intenta generar texto con un modelo específico vía REST API."""
+def intentar_generar_con_modelo(modelo, prompt):
+    """Intenta conectar con un modelo específico de Gemini."""
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent?key={GEMINI_API_KEY}"
     headers = {'Content-Type': 'application/json'}
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": 0.7}
     }
+    
     try:
+        print(f"🔄 Probando conexión con modelo: {modelo}...")
         response = requests.post(url, headers=headers, data=json.dumps(payload))
+        
         if response.status_code == 200:
             return response.json()['candidates'][0]['content']['parts'][0]['text']
         else:
-            print(f"⚠️ Falló modelo {modelo}: {response.status_code}")
+            print(f"⚠️ Falló {modelo} (Error {response.status_code})")
             return None
     except Exception as e:
-        print(f"⚠️ Error conexión {modelo}: {e}")
+        print(f"⚠️ Error de red con {modelo}: {e}")
         return None
+
+def obtener_texto_ia(prompt):
+    # LISTA DE MODELOS A PROBAR (En orden de preferencia)
+    # Si falla el Pro, va al Flash, si falla va al Pro antiguo.
+    modelos_a_probar = ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-pro"]
+    
+    for modelo in modelos_a_probar:
+        texto = intentar_generar_con_modelo(modelo, prompt)
+        if texto:
+            print(f"✅ ¡Conexión exitosa con {modelo}!")
+            return texto
+    
+    return None
 
 def main():
     # 1. Obtener clima
@@ -70,66 +86,67 @@ def main():
     curr = data['current']
     day = data['daily']['data'][0]['all_day']
 
-    # 2. Traducción manual para la imagen
+    # 2. Traducción manual (Corrección del 'Mostly Cloudy')
     estado_es = traducir_estado(curr['summary'])
 
-    # 3. Redacción con IA (Estrategia de doble intento)
+    # 3. Redacción con IA (Estrategia Multi-Modelo)
     print("Iniciando redacción periodística...")
     
     prompt = f"""
-    Actúa como Editor Jefe de un diario digital en la Patagonia.
-    Escribe una NOTA COMPLETA EN ESPAÑOL sobre el clima en {TARGET_CITY}.
-
+    Actúa como un periodista experto de Neuquén. Escribe una NOTICIA LARGA (SEO) sobre el clima.
+    
     DATOS:
-    - Estado: {estado_es} ({curr['summary']})
-    - Temp: {curr['temperature']}°C
+    - Ciudad: {TARGET_CITY}
+    - Estado: {estado_es}
+    - Temperatura: {curr['temperature']}°C
     - Mín: {day['temperature_min']}°C | Máx: {day['temperature_max']}°C
     - Viento: {curr['wind']['speed']} km/h
 
-    REQUISITOS (HTML):
-    1. TITULAR: Periodístico, impactante, sin clickbait barato.
-    2. CUERPO: Escribe 4 PÁRRAFOS COMPLETOS.
-       - Párrafo 1: Introducción y sensación térmica.
-       - Párrafo 2: Pronóstico de la tarde (Máxima).
-       - Párrafo 3: Análisis del viento (importante en la zona).
-       - Párrafo 4: Recomendaciones y cierre.
-    3. FORMATO: Usa etiquetas <p> para párrafos, <h3> para subtítulos y <strong> para resaltar números.
+    REQUISITOS OBLIGATORIOS:
+    1. Escribe 4 PÁRRAFOS COMPLETOS. No hagas resúmenes cortos.
+    2. Usa un tono serio y profesional.
+    3. Analiza el viento y da recomendaciones.
+    4. Usa etiquetas HTML <h3> para subtítulos y <strong> para resaltar datos.
+    5. IDIOMA: ESPAÑOL.
     """
     
-    # INTENTO 1: Gemini 1.5 Pro (Nombre estándar)
-    texto_ia = llamar_api_google("gemini-1.5-pro", prompt)
-    
-    # INTENTO 2: Si falla, probamos Gemini 1.5 Flash (Más robusto)
-    if not texto_ia:
-        print("🔄 Cambiando a modelo Flash de respaldo...")
-        texto_ia = llamar_api_google("gemini-1.5-flash", prompt)
+    texto_ia = obtener_texto_ia(prompt)
 
-    # Fallback final (solo si todo falla)
+    # Fallback final de emergencia (Solo si los 3 modelos fallan)
     if not texto_ia:
-        texto_ia = f"<p>Reporte de emergencia: Clima en {TARGET_CITY} con {curr['temperature']}°C y condiciones de {estado_es}.</p>"
+        print("❌ Todos los modelos fallaron. Usando plantilla de emergencia.")
+        texto_ia = f"""
+        <h3>Reporte Meteorológico para {TARGET_CITY}</h3>
+        <p>La ciudad de <strong>{TARGET_CITY}</strong> presenta hoy condiciones de <strong>{estado_es}</strong> con una temperatura actual de <strong>{curr['temperature']}°C</strong>.</p>
+        <p>Se espera una temperatura máxima de {day['temperature_max']}°C y una mínima de {day['temperature_min']}°C. El viento sopla a {curr['wind']['speed']} km/h.</p>
+        <p>Se recomienda precaución al circular y mantenerse informado sobre las alertas locales.</p>
+        <p><em>(Nota generada automáticamente por fallo de conexión con el servicio de redacción).</em></p>
+        """
 
     # 4. Procesamiento de texto
     texto_limpio = texto_ia.replace('```html', '').replace('```', '').strip()
     lineas = texto_limpio.split('\n')
     
-    # Extracción inteligente de título
-    titulo = lineas[0].replace('<h1>', '').replace('</h1>', '').replace('#', '').strip()
-    if len(titulo) > 100 or "<p>" in titulo: 
+    # Intento de sacar título
+    titulo = lineas[0].replace('<h1>', '').replace('</h1>', '').replace('#', '').replace('*', '').strip()
+    
+    # Validación de título y cuerpo
+    if len(titulo) > 100 or "<" in titulo: 
         titulo = f"Pronóstico {TARGET_CITY}: {estado_es} y {curr['temperature']}°C"
         cuerpo = texto_limpio
     else:
         cuerpo = "\n".join(lineas[1:])
 
-    # 5. Generación de HTML Final (Placa Traducida + Nota)
+    # 5. Generación de HTML Final (PLACA CORREGIDA EN ESPAÑOL)
     color_bg = "#e67e22" if curr['temperature'] > 26 else "#2980b9"
     
     html_final = f"""
     <div style="font-family: 'Georgia', serif; font-size: 18px; color: #333; line-height: 1.6;">
-        <div style="background: {color_bg}; color: white; padding: 30px; border-radius: 10px; text-align: center; margin-bottom: 30px;">
-            <p style="text-transform: uppercase; font-size: 14px; letter-spacing: 2px; margin:0; opacity:0.9;">Reporte del Tiempo</p>
-            <h2 style="font-size: 80px; margin: 10px 0; font-weight: 700;">{curr['temperature']}°C</h2>
-            <p style="font-size: 24px; font-weight: 600; text-transform: uppercase; margin:0;">{estado_es}</p>
-            <div style="margin-top: 20px; border-top: 1px solid rgba(255,255,255,0.4); padding-top: 15px; display: flex; justify-content: center; gap: 20px; font-size: 16px;">
+        <div style="background: {color_bg}; color: white; padding: 40px; border-radius: 12px; text-align: center; margin-bottom: 30px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
+            <p style="text-transform: uppercase; font-size: 14px; letter-spacing: 2px; margin:0; opacity:0.9; font-family: sans-serif;">Pronóstico del Tiempo</p>
+            <h2 style="font-size: 90px; margin: 5px 0; font-weight: 700; font-family: sans-serif;">{curr['temperature']}°C</h2>
+            <p style="font-size: 26px; font-weight: 700; text-transform: uppercase; margin:0; font-family: sans-serif;">{estado_es}</p>
+            <div style="margin-top: 25px; border-top: 1px solid rgba(255,255,255,0.4); padding-top: 20px; display: flex; justify-content: center; gap: 30px; font-size: 16px;">
                 <span>Min: <strong>{day['temperature_min']}°</strong></span>
                 <span>Viento: <strong>{curr['wind']['speed']} km/h</strong></span>
                 <span>Max: <strong>{day['temperature_max']}°</strong></span>
@@ -140,8 +157,8 @@ def main():
             {cuerpo}
         </div>
         
-        <div style="margin-top: 30px; padding: 15px; background: #f0f0f0; border-left: 4px solid #555; font-size: 14px; color: #666;">
-            <em>Información generada automáticamente basada en datos de Meteosource.</em>
+        <div style="margin-top: 30px; padding: 15px; background: #f9f9f9; border-left: 4px solid #333; font-size: 14px; color: #666;">
+            <em>Fuente: Meteosource y Redacción Digital Automática.</em>
         </div>
     </div>
     """
@@ -154,7 +171,7 @@ def main():
     res = requests.post(f"{WORDPRESS_URL}/wp-json/wp/v2/posts", json=post_data, auth=auth)
     
     if res.status_code == 201:
-        print("✅ ÉXITO: Nota publicada con traducción y redacción completa.")
+        print("✅ ÉXITO: Nota publicada en WordPress.")
     else:
         print(f"❌ Error WP: {res.text}")
 
