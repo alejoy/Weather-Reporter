@@ -12,7 +12,7 @@ WORDPRESS_APP_PASSWORD = os.environ.get("WORDPRESS_APP_PASSWORD")
 WORDPRESS_URL = os.environ.get("WORDPRESS_URL").rstrip('/')
 TARGET_CITY = os.environ.get("TARGET_CITY", "Neuquen")
 
-# Diccionario de Traducción
+# Diccionario de Traducción (Para que la placa salga en Español)
 TRADUCCIONES = {
     "sunny": "Soleado", "mostly sunny": "Mayormente Soleado", "partly sunny": "Parcialmente Soleado",
     "mostly cloudy": "Mayormente Nublado", "cloudy": "Nublado", "overcast": "Cubierto",
@@ -42,27 +42,29 @@ def llamar_api_directa(modelo, prompt):
         
         if res.status_code == 200:
             return res.json()['candidates'][0]['content']['parts'][0]['text']
+        elif res.status_code == 429:
+            print(f"⚠️ Cuota llena en {modelo} (429).")
+            return None
         else:
-            print(f"⚠️ Falló {modelo} (Error {res.status_code})")
+            print(f"⚠️ Error {modelo} ({res.status_code})")
             return None
     except Exception as e:
-        print(f"⚠️ Error de red: {e}")
+        print(f"⚠️ Error red: {e}")
         return None
 
 def generar_noticia_robusta(prompt):
     # ESTRATEGIA CASCADA:
-    # 1. Flash: Rápido, límites altos, muy estable. (Nuestra mejor opción)
-    # 2. Pro: Más "inteligente" pero con límites estrictos. (Solo si Flash falla)
-    # 3. Legacy: El modelo viejo por si todo lo moderno falla.
+    # 1. Flash: Prioridad absoluta. Rápido y con mucha cuota gratis.
+    # 2. Pro: Solo si Flash falla.
     
     modelos = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
 
     for modelo in modelos:
         texto = llamar_api_directa(modelo, prompt)
         if texto:
-            print(f"✅ ¡ÉXITO! Nota generada usando: {modelo}")
+            print(f"✅ ¡ÉXITO! Redacción completada con {modelo}")
             return texto
-        print("🔄 Cambiando al siguiente modelo...")
+        print("🔄 Cambiando al siguiente modelo de la lista...")
         time.sleep(1) # Pausa de seguridad
     
     return None
@@ -79,75 +81,37 @@ def main():
     
     curr = data['current']
     day = data['daily']['data'][0]['all_day']
-    estado_es = traducir_estado(curr['summary'])
+    estado_es = traducir_estado(curr['summary']) # Traducimos aquí para la placa y el prompt
 
     # 2. Redacción IA
     prompt = f"""
-    Eres Periodista en Neuquén. Escribe una NOTICIA LARGA (SEO) sobre el clima.
+    Eres Periodista Senior en Neuquén. Escribe una NOTICIA EXTENSA (SEO) sobre el clima.
     
-    DATOS:
+    DATOS REALES:
     - Ciudad: {TARGET_CITY}
-    - Estado: {estado_es}
+    - Estado actual: {estado_es} (Original: {curr['summary']})
     - Temp: {curr['temperature']}°C
     - Mín: {day['temperature_min']}°C | Máx: {day['temperature_max']}°C
     - Viento: {curr['wind']['speed']} km/h
 
-    REQUISITOS (HTML):
+    REQUISITOS (HTML OBLIGATORIO):
     1. Título H1 Periodístico (Clickbait ético).
     2. CUERPO: 4 PÁRRAFOS COMPLETOS Y LARGOS.
-       - Intro, Pronóstico tarde, Viento, Cierre.
-    3. Usa <h3> y <strong>.
-    4. IDIOMA: Español.
+       - Intro: Sensación térmica y estado del cielo.
+       - Desarrollo: Pronóstico para la tarde.
+       - Viento: Análisis detallado (es clave en Patagonia).
+       - Cierre: Recomendaciones.
+    3. Usa etiquetas <h3> para subtítulos y <strong> para resaltar datos.
+    4. IDIOMA: Español Argentino Neutro.
     """
     
     texto_ia = generar_noticia_robusta(prompt)
 
     # Fallback (Emergencia)
     if not texto_ia:
+        print("❌ Fallaron todos los modelos. Usando texto básico.")
         texto_ia = f"<h3>Reporte {TARGET_CITY}</h3><p>Condiciones actuales: {estado_es}, {curr['temperature']}°C. Se espera una máxima de {day['temperature_max']}°C.</p>"
 
     # 3. Limpieza y HTML
     texto_limpio = texto_ia.replace('```html', '').replace('```', '').strip()
-    lineas = texto_limpio.split('\n')
-    
-    titulo = f"Pronóstico {TARGET_CITY}: {estado_es} y {curr['temperature']}°C"
-    cuerpo = texto_limpio
-    
-    # Intentar extraer título si la IA lo puso
-    if len(lineas) > 0:
-        posible_titulo = lineas[0].replace('<h1>','').replace('</h1>','').replace('#','').replace('*','').strip()
-        # Si la primera línea parece un título (corto y sin tags raros)
-        if len(posible_titulo) > 5 and len(posible_titulo) < 100:
-            titulo = posible_titulo
-            cuerpo = "\n".join(lineas[1:])
-
-    color_bg = "#e67e22" if curr['temperature'] > 26 else "#2980b9"
-    
-    html_post = f"""
-    <div style="font-family:'Georgia',serif; font-size:18px; line-height:1.6; color:#333;">
-        <div style="background:{color_bg}; color:white; padding:30px; border-radius:10px; text-align:center; margin-bottom:20px;">
-            <p style="text-transform:uppercase; font-size:14px; opacity:0.8; margin:0; font-family:sans-serif;">Reporte Oficial</p>
-            <h2 style="font-size:80px; margin:5px 0; font-weight:700; font-family:sans-serif;">{curr['temperature']}°C</h2>
-            <p style="font-size:24px; font-weight:600; text-transform:uppercase; margin:0; font-family:sans-serif;">{estado_es}</p>
-            <div style="margin-top:20px; border-top:1px solid rgba(255,255,255,0.3); padding-top:15px; display:flex; justify-content:center; gap:20px;">
-                <span>Min: <b>{day['temperature_min']}°</b></span>
-                <span>Viento: <b>{curr['wind']['speed']} km/h</b></span>
-                <span>Max: <b>{day['temperature_max']}°</b></span>
-            </div>
-        </div>
-        <div style="background:#fff; padding:10px;">{cuerpo}</div>
-    </div>
-    """
-
-    # 4. Publicar
-    auth = (WORDPRESS_USER, WORDPRESS_APP_PASSWORD)
-    post = {'title': titulo, 'content': html_post, 'status': 'draft'}
-    r = requests.post(f"{WORDPRESS_URL}/wp-json/wp/v2/posts", json=post, auth=auth)
-    
-    if r.status_code == 201:
-        print("✅ ÉXITO TOTAL: Nota publicada.")
-    else:
-        print(f"❌ Error WP: {r.text}")
-
-if __name__ == "__main__":
-    main()
+    lineas = texto_limpio.split
