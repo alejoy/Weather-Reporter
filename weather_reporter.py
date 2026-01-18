@@ -4,6 +4,7 @@ import json
 import time
 from datetime import datetime
 import re
+import markdown
 
 # --- CONFIGURACIÓN ---
 METEOSOURCE_API_KEY = os.environ.get("METEOSOURCE_API_KEY")
@@ -16,56 +17,44 @@ WORDPRESS_APP_PASSWORD = os.environ.get("WORDPRESS_APP_PASSWORD")
 WORDPRESS_URL = os.environ.get("WORDPRESS_URL").rstrip('/')
 WORDPRESS_AUTHOR_ID = os.environ.get("WORDPRESS_AUTHOR_ID", "1")
 
-# --- 1. DATOS CLIMÁTICOS (Corrección de Estructura) ---
+# --- 1. DATOS CLIMÁTICOS ---
 def obtener_clima_neuquen():
-    """Consulta la API de Meteosource con extracción segura de datos."""
     url = "https://www.meteosource.com/api/v1/free/point"
     params = {
-        "place_id": "neuquen",
-        "sections": "current,daily",
-        "language": "en",
-        "units": "metric",
-        "key": METEOSOURCE_API_KEY
+        "place_id": "neuquen", "sections": "current,daily",
+        "language": "en", "units": "metric", "key": METEOSOURCE_API_KEY
     }
     
     try:
         print("👉 Consultando Meteosource...", end=" ")
         res = requests.get(url, params=params)
         data = res.json()
-        
-        # Validación básica
+
         if 'daily' not in data or 'data' not in data['daily']:
-            print("❌ Estructura de API desconocida.")
             return None
 
         current = data.get('current', {})
-        daily = data['daily']['data'][0] # Pronóstico de hoy
+        daily = data['daily']['data'][0]
         all_day = daily.get('all_day', {})
         
-        # --- EXTRACCIÓN SEGURA (Evita el KeyError 'wind') ---
-        # Temperaturas
+        # Extracción segura
         temp_actual = current.get('temperature', 0)
         temp_min = all_day.get('temperature_min', 0)
         temp_max = all_day.get('temperature_max', 0)
         
-        # Viento (Aquí estaba el error: accedemos seguro dentro de all_day)
         wind_data = all_day.get('wind', {})
         viento_speed = wind_data.get('speed', 0)
-        # Si no hay ráfagas en el daily, usamos las del current o estimamos
         viento_gusts = wind_data.get('gusts', current.get('wind', {}).get('gusts', viento_speed))
 
-        # Lluvia
         precip_data = all_day.get('precipitation', {})
         lluvia_total = precip_data.get('total', 0)
         lluvia_prob = precip_data.get('probability', 0)
         
-        # Cielo
         resumen_cielo = daily.get('summary', 'Algo nublado')
 
-        # --- DETECCIÓN DE ALERTAS ---
+        # Alertas
         alerta_nivel = ""
         fenomenos = []
-        
         if viento_gusts > 70:
             alerta_nivel = "Amarilla/Naranja"
             fenomenos.append(f"Viento fuerte ({viento_gusts} km/h)")
@@ -76,22 +65,15 @@ def obtener_clima_neuquen():
             alerta_nivel = "Naranja"
             fenomenos.append("Ola de calor extrema")
 
-        datos_finales = {
-            "temp_actual": temp_actual,
-            "temp_min": temp_min,
-            "temp_max": temp_max,
-            "viento_promedio": viento_speed,
-            "viento_rafagas": viento_gusts,
-            "resumen_cielo": resumen_cielo,
-            "lluvia_prob": lluvia_prob,
-            "alerta": alerta_nivel,
-            "fenomenos_alerta": ", ".join(fenomenos)
+        return {
+            "temp_actual": temp_actual, "temp_min": temp_min, "temp_max": temp_max,
+            "viento_promedio": viento_speed, "viento_rafagas": viento_gusts,
+            "resumen_cielo": resumen_cielo, "lluvia_prob": lluvia_prob,
+            "alerta": alerta_nivel, "fenomenos_alerta": ", ".join(fenomenos)
         }
-        print("✅ Datos obtenidos correctamente.")
-        return datos_finales
 
     except Exception as e:
-        print(f"❌ Error API Clima Genérico: {e}")
+        print(f"❌ Error API: {e}")
         return None
 
 # --- 2. FECHA ---
@@ -104,7 +86,7 @@ def obtener_fecha_formato():
 # --- 3. IMAGEN ---
 def buscar_imagen_clima(condicion):
     query = f"Clima Neuquen {condicion} paisaje"
-    print(f"👉 Buscando imagen para: {query}...", end=" ")
+    print(f"👉 Buscando imagen: {query}...", end=" ")
     try:
         url = "https://www.googleapis.com/customsearch/v1"
         params = {"q": query, "cx": GOOGLE_SEARCH_CX, "key": GOOGLE_SEARCH_API_KEY, "searchType": "image", "imgSize": "large", "num": 3, "safe": "active"}
@@ -113,7 +95,6 @@ def buscar_imagen_clima(condicion):
             print("✅")
             return res.json()["items"][0]["link"]
     except: pass
-    print("❌")
     return None
 
 def subir_imagen_wordpress(img_url):
@@ -130,7 +111,7 @@ def subir_imagen_wordpress(img_url):
     except: pass
     return None
 
-# --- 4. REDACCIÓN (Prompt Ajustado) ---
+# --- 4. REDACCIÓN ---
 def generar_pronostico_ia(datos_clima, fecha_hoy):
     input_json = {
         "ubicacion": "Neuquén Capital y Alto Valle",
@@ -157,16 +138,16 @@ def generar_pronostico_ia(datos_clima, fecha_hoy):
     1. TÍTULO (#):
        - Estructura: [Fenómeno Principal] en [Lugar]: [Dato Duro], [Pregunta de enganche].
        - Ejemplo: "Calor extremo en Neuquén: 38°C de máxima, ¿cuándo llega el alivio?"
-       - Si el campo "alerta" tiene datos, LA ALERTA DEBE ESTAR EN EL TÍTULO.
+       - Si hay alerta, DEBE estar en el título.
 
     2. BAJADA:
        - Cita siempre al "Servicio Meteorológico Nacional (SMN)" o "AIC".
        - Cierre: "Mirá el detalle del pronóstico."
 
     3. CUERPO:
-       - Usa negritas para temperaturas y vientos (ej: **35°C**, **ráfagas de 60 km/h**).
-       - Párrafos cortos.
+       - Usa negritas (**texto**) para temperaturas y vientos.
        - Usa subtítulos (##) con preguntas (ej: ## ¿Cómo estará la tarde?).
+       - Párrafos cortos.
 
     4. IDIOMA: Español Argentino Neutro.
     """
@@ -178,10 +159,8 @@ def generar_pronostico_ia(datos_clima, fecha_hoy):
         if res.status_code == 200:
             print("✅")
             return res.json()['candidates'][0]['content']['parts'][0]['text']
-        else:
-            print(f"❌ Error IA: {res.status_code}")
-            return None
-    except: return None
+    except: pass
+    return None
 
 # --- MAIN ---
 def main():
@@ -191,19 +170,24 @@ def main():
     datos = obtener_clima_neuquen()
     if not datos: return
 
-    texto_nota = generar_pronostico_ia(datos, fecha_hoy)
-    if not texto_nota: return
+    texto_md = generar_pronostico_ia(datos, fecha_hoy)
+    if not texto_md: return
 
-    # Limpieza
-    texto_nota = texto_nota.replace('```markdown', '').replace('```', '').strip()
-    if texto_nota.startswith('#'):
-        # Separar título del cuerpo
-        partes = texto_nota.split('\n', 1)
+    # Limpieza básica
+    texto_md = texto_md.replace('```markdown', '').replace('```', '').strip()
+    
+    # Separar Título (Markdown #) del Cuerpo
+    if texto_md.startswith('#'):
+        partes = texto_md.split('\n', 1)
         titulo = partes[0].replace('#', '').strip()
-        cuerpo = partes[1].strip() if len(partes) > 1 else ""
+        cuerpo_md = partes[1].strip() if len(partes) > 1 else ""
     else:
         titulo = f"Clima: {fecha_hoy}"
-        cuerpo = texto_nota
+        cuerpo_md = texto_md
+
+    # --- TRADUCCIÓN A HTML (LA SOLUCIÓN) ---
+    # Convertimos los **negrita** a <strong> y ## Subtitulos a <h2>
+    cuerpo_html = markdown.markdown(cuerpo_md)
 
     # Imagen
     img_url = buscar_imagen_clima(datos['resumen_cielo'])
@@ -212,9 +196,9 @@ def main():
     # HTML Final
     html_final = f"""
     <div style="font-family: 'Arial', sans-serif; font-size: 18px; line-height: 1.6; color: #333;">
-        {cuerpo}
+        {cuerpo_html}
         <hr>
-        <p style="font-size:14px; color:#777;">⚠️ <em>Fuente: Datos automáticos. Consultar fuentes oficiales ante alertas.</em></p>
+        <p style="font-size:14px; color:#777;">⚠️ <em>Fuente: Datos automáticos vía API Meteorológica.</em></p>
     </div>
     """
     
@@ -223,7 +207,7 @@ def main():
     post = {'title': titulo, 'content': html_final, 'status': 'draft', 'author': int(WORDPRESS_AUTHOR_ID), 'featured_media': media_id}
     
     r = requests.post(f"{WORDPRESS_URL}/wp-json/wp/v2/posts", json=post, auth=auth)
-    if r.status_code == 201: print("✅ Nota publicada.")
+    if r.status_code == 201: print("✅ Nota publicada correctamente.")
     else: print(f"❌ Error WP: {r.text}")
 
 if __name__ == "__main__":
