@@ -122,4 +122,187 @@ def generar_placa_html(datos, fecha):
     return placa
 
 # --- 2. CONEXIÓN AL SMN ---
-def obtener_datos_s
+def obtener_datos_smn():
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    datos_finales = {"estado": None, "pronostico": [], "alertas": []}
+
+    print("🇦🇷 Consultando SMN...")
+    
+    # A) Estado Actual
+    try:
+        res = requests.get("https://ws.smn.gob.ar/map_items/weather", headers=headers, timeout=10)
+        estaciones = res.json()
+        estacion_nqn = next((e for e in estaciones if "Neuquén" in e['name']), None)
+        
+        if estacion_nqn:
+            w = estacion_nqn['weather']
+            datos_finales["estado"] = {
+                "temp": f"{w['temp']}°C",
+                "humedad": f"{w['humidity']}%",
+                "cielo": w['description'],
+                "viento_vel": f"{w['wind_speed']} km/h",
+                "viento_full": f"del {w['wing_deg']} a {w['wind_speed']} km/h"
+            }
+    except: pass
+
+    # B) Alertas
+    try:
+        res = requests.get("https://ws.smn.gob.ar/alerts/type/AL", headers=headers, timeout=10)
+        todas = res.json()
+        for alerta in todas:
+            # Búsqueda laxa de "Neuquén" o "Confluencia"
+            json_str = json.dumps(alerta, ensure_ascii=False)
+            if "Confluencia" in json_str or ("Neuquén" in json_str and "Cordillera" not in json_str):
+                 datos_finales["alertas"].append({
+                    "titulo": alerta['title'],
+                    "nivel": alerta['severity'],
+                    "descripcion": alerta['description']
+                })
+    except: pass
+    
+    # C) Pronóstico (Texto para la IA)
+    try:
+        res = requests.get("https://ws.smn.gob.ar/map_items/forecast/1", headers=headers, timeout=10)
+        for p in res.json():
+            if "Neuquén" in p['name']:
+                datos_finales["pronostico"] = p['weather']
+                break
+    except: pass
+
+    return datos_finales
+
+# --- 3. IMAGEN Y FECHA ---
+def obtener_fecha_formato():
+    dias = {'Monday': 'Lunes', 'Tuesday': 'Martes', 'Wednesday': 'Miércoles', 'Thursday': 'Jueves', 'Friday': 'Viernes', 'Saturday': 'Sábado', 'Sunday': 'Domingo'}
+    meses = {'January': 'Enero', 'February': 'Febrero', 'March': 'Marzo', 'April': 'Abril', 'May': 'Mayo', 'June': 'Junio', 'July': 'Julio', 'August': 'Agosto', 'September': 'Septiembre', 'October': 'Octubre', 'November': 'Noviembre', 'December': 'Diciembre'}
+    now = datetime.now()
+    return f"{dias.get(now.strftime('%A'))} {now.day} de {meses.get(now.strftime('%B'))}"
+
+def buscar_imagen_clima(condicion_texto):
+    query = f"Paisaje Neuquen {condicion_texto} ciudad"
+    print(f"👉 Buscando imagen: {query}...", end=" ")
+    try:
+        url = "https://www.googleapis.com/customsearch/v1"
+        params = {"q": query, "cx": GOOGLE_SEARCH_CX, "key": GOOGLE_SEARCH_API_KEY, "searchType": "image", "imgSize": "large", "num": 4, "safe": "active"}
+        res = requests.get(url, params=params)
+        data = res.json()
+        if "items" in data:
+            for item in data["items"]:
+                if "facebook" not in item["displayLink"]:
+                    print("✅")
+                    return item["link"]
+    except: pass
+    return None
+
+def subir_imagen_wordpress(img_url):
+    if not img_url: return None
+    try:
+        res_img = requests.get(img_url)
+        if res_img.status_code == 200:
+            filename = f"clima-{int(time.time())}.jpg"
+            url_up = f"{WORDPRESS_URL}/wp-json/wp/v2/media"
+            headers = {"Content-Type": "image/jpeg", "Content-Disposition": f"attachment; filename={filename}"}
+            auth = (WORDPRESS_USER, WORDPRESS_APP_PASSWORD)
+            res_wp = requests.post(url_up, headers=headers, data=res_img.content, auth=auth)
+            if res_wp.status_code == 201: return res_wp.json()['id']
+    except: pass
+    return None
+
+# --- 4. REDACCIÓN IA ---
+def generar_pronostico_ia(datos_smn, fecha_hoy):
+    alertas_str = json.dumps(datos_smn['alertas'], ensure_ascii=False) if datos_smn['alertas'] else "NO HAY ALERTAS VIGENTES. NO INVENTAR."
+    input_str = json.dumps(datos_smn, ensure_ascii=False, indent=2)
+
+    prompt = f"""
+    ROL: Periodista de Clima (SMN Oficial).
+    
+    DATOS OFICIALES:
+    <input_usuario>
+    {input_str}
+    </input_usuario>
+
+    ESTRUCTURA (Markdown):
+    1. TÍTULO (#):
+       - SI HAY ALERTA: "Alerta [Nivel] en Neuquén: [Fenómeno] y recomendaciones".
+       - SI NO: "El tiempo en Neuquén: [Temp] y [Cielo], ¿cómo sigue el día?".
+    
+    2. BAJADA: Breve resumen. Citar al SMN.
+    
+    3. CUERPO (## Subtítulos):
+       - "## Estado actual": Datos de ahora.
+       - "## Pronóstico": Mañana y tarde.
+       - "## Recomendaciones": 3 tips útiles basados en el clima (Si hay viento: cuidado al manejar. Si hay sol: protector).
+
+    FORMATO:
+    - Negritas (**texto**) para datos duros.
+    - Idioma: Español Argentino.
+    """
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={GEMINI_API_KEY}"
+    try:
+        print("🤖 Redactando...", end=" ")
+        res = requests.post(url, headers={'Content-Type': 'application/json'}, data=json.dumps({"contents": [{"parts": [{"text": prompt}]}]}))
+        if res.status_code == 200:
+            print("✅")
+            return res.json()['candidates'][0]['content']['parts'][0]['text']
+    except: pass
+    return None
+
+# --- MAIN ---
+def main():
+    fecha_hoy = obtener_fecha_formato()
+    print(f"--- REPORTE OFICIAL SMN + PLACA: {fecha_hoy} ---")
+    
+    datos = obtener_datos_smn()
+    if not datos['estado']:
+        print("❌ Error de datos SMN.")
+        return
+
+    # 1. Generar Placa HTML
+    placa_html = generar_placa_html(datos, fecha_hoy)
+    
+    # 2. Generar Texto IA
+    texto_md = generar_pronostico_ia(datos, fecha_hoy)
+    if not texto_md: return
+
+    # Limpieza y Markdown -> HTML
+    texto_md = texto_md.replace('```markdown', '').replace('```', '').strip()
+    if texto_md.startswith('#'):
+        partes = texto_md.split('\n', 1)
+        titulo = partes[0].replace('#', '').strip()
+        cuerpo_md = partes[1].strip() if len(partes) > 1 else ""
+    else:
+        titulo = f"Clima: {fecha_hoy}"
+        cuerpo_md = texto_md
+
+    cuerpo_html = markdown.markdown(cuerpo_md)
+
+    # 3. Imagen Destacada (Google)
+    img_url = buscar_imagen_clima(datos['estado']['cielo'])
+    media_id = subir_imagen_wordpress(img_url)
+
+    # 4. HTML FINAL (Placa + Nota)
+    html_final = f"""
+    <div style="font-family: 'Arial', sans-serif; font-size: 18px; line-height: 1.6; color: #333;">
+        
+        {placa_html}
+
+        {cuerpo_html}
+        
+        <hr>
+        <div style="background: #eef9fd; padding: 15px; border-left: 5px solid #2980b9; font-size: 16px;">
+            ℹ️ <strong>Fuente Oficial:</strong> <a href="https://www.smn.gob.ar" target="_blank">Servicio Meteorológico Nacional (SMN)</a>.
+        </div>
+    </div>
+    """
+    
+    print(f"Publicando: {titulo}")
+    auth = (WORDPRESS_USER, WORDPRESS_APP_PASSWORD)
+    post = {'title': titulo, 'content': html_final, 'status': 'draft', 'author': int(WORDPRESS_AUTHOR_ID), 'featured_media': media_id}
+    
+    r = requests.post(f"{WORDPRESS_URL}/wp-json/wp/v2/posts", json=post, auth=auth)
+    if r.status_code == 201: print("✅ Nota + Placa publicadas.")
+    else: print(f"❌ Error WP: {r.text}")
+
+if __name__ == "__main__":
+    main()
